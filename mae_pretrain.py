@@ -8,14 +8,25 @@ from torchvision.transforms import ToTensor, Compose, Normalize
 from tqdm import tqdm
 from einops import rearrange
 from mae_model import MAE_ViT
-from utils import setup_seed
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from pathlib import Path
 from PIL import Image
 import numpy as np
+import random
+import torch
+import numpy as np
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+def setup_seed(seed=42):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+
+setup_seed()
 
 def get_args():
     parser = argparse.ArgumentParser()

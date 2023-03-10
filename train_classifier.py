@@ -8,7 +8,18 @@ from torchvision.transforms import ToTensor, Compose, Normalize
 from tqdm import tqdm
 
 from model import *
-from utils import setup_seed
+import random
+import torch
+import numpy as np
+
+def setup_seed(seed=42):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+
+setup_seed()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -23,8 +34,6 @@ if __name__ == '__main__':
     parser.add_argument('--output_model_path', type=str, default='vit-t-classifier-from_scratch.pt')
 
     args = parser.parse_args()
-
-    setup_seed(args.seed)
 
     batch_size = args.batch_size
     load_batch_size = min(args.max_device_batch_size, batch_size)
