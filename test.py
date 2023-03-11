@@ -1,4 +1,3 @@
-
 import torch
 import torch.nn as nn
 from torchvision import datasets
@@ -17,6 +16,7 @@ import cv2
 from models2 import SegmentNet, DecisionNet, weights_init_normal
 from dataset import KolektorDataset
 
+
 def tensor_vis_result(imgTest, segTest, labelStr, score, save_path):
     imgTest = imgTest.cpu().squeeze().permute(1, 2, 0).numpy()
     imgTest = (np.clip(imgTest, 0, 1) * 255).astype('uint8')
@@ -34,17 +34,19 @@ def tensor_vis_result(imgTest, segTest, labelStr, score, save_path):
                 if area > max_area:
                     max_contour = c
                     max_area = area
-                [x , y, w, h] = cv2.boundingRect(max_contour)
-            cv2.rectangle(imgTest, (x+1, y), (x + w, y + h), (0, 0, 255), 2)
+                [x, y, w, h] = cv2.boundingRect(max_contour)
+            cv2.rectangle(imgTest, (x + 1, y), (x + w, y + h), (0, 0, 255), 2)
             cv2.rectangle(imgTest, (x, max(y - 40, 0)), (x + w, y), (0, 0, 255), -1)
-            cv2.putText(imgTest, str(np.round(score, 6)), (x+4, max(y - 10, 0)), cv2.FONT_HERSHEY_COMPLEX, 0.9, (255,255,255), 2)
+            cv2.putText(imgTest, str(np.round(score, 6)), (x + 4, max(y - 10, 0)), cv2.FONT_HERSHEY_COMPLEX, 0.9,
+                        (255, 255, 255), 2)
     cv2.imwrite(save_path, imgTest)
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--cuda", type=bool, default=True, help="number of gpu")
 parser.add_argument("--test_seg_epoch", type=int, default=100, help="test segment epoch")
 parser.add_argument("--test_dec_epoch", type=int, default=100, help="test segment epoch")
-parser.add_argument("--img_height", type=int, default=512, help="size of image height") # 1408x512 704x256
+parser.add_argument("--img_height", type=int, default=512, help="size of image height")  # 1408x512 704x256
 parser.add_argument("--img_width", type=int, default=512, help="size of image width")
 opt = parser.parse_args()
 print(opt)
@@ -69,20 +71,20 @@ if opt.test_dec_epoch != 0:
     decision_net.load_state_dict(torch.load(saveRoot + "/saved_models/decision_net_%d.pth" % (opt.test_dec_epoch)))
 
 transforms_ = transforms.Compose([
-    transforms.Resize((opt.img_height, opt.img_width), Image.BICUBIC),
+    transforms.Resize((opt.img_height, opt.img_width), transforms.InterpolationMode.BILINEAR),
     transforms.ToTensor(),
-    #transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+    # transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
 ])
 testloader = DataLoader(
-    KolektorDataset(dataSetRoot, transforms_=transforms_, transforms_mask= None, 
-        subFold="Test_NG", isTrain=False),
+    KolektorDataset(dataSetRoot, transforms_=transforms_, transforms_mask=None,
+                    subFold="Test_NG", isTrain=False),
     batch_size=1,
     shuffle=True,
     num_workers=0,
 )
 testloader2 = DataLoader(
-    KolektorDataset(dataSetRoot, transforms_=transforms_, transforms_mask= None, 
-        subFold="Test_OK", isTrain=False),
+    KolektorDataset(dataSetRoot, transforms_=transforms_, transforms_mask=None,
+                    subFold="Test_OK", isTrain=False),
     batch_size=1,
     shuffle=True,
     num_workers=0,
@@ -108,10 +110,10 @@ for i, testBatch in enumerate(testloader):
     gt_c = Variable(torch.Tensor(np.ones((batchData["img"].size(0), 1))), requires_grad=False)
     # Train_OK
     # gt_c = Variable(torch.Tensor(np.zeros((batchData["img"].size(0), 1))), requires_grad=False)
-    
+
     # print(gt_c.numpy()[0,0]) # Train_NG:1.0,Train_OK:0.0
-    
-    gt = gt_c.numpy()[0,0]
+
+    gt = gt_c.numpy()[0, 0]
     t1 = time.time()
 
     imgTest = testBatch["img"].cuda()
@@ -126,11 +128,11 @@ for i, testBatch in enumerate(testloader):
     torch.cuda.synchronize()
     t2 = time.time()
 
-    print("Image NO %d, Score %f"% (i, cTest.item()))
+    print("Image NO %d, Score %f" % (i, cTest.item()))
     if cTest.item() > 0.45:
-        labelStr = "NG" # 0.51
-    else: 
-        labelStr = "OK" # 0.45
+        labelStr = "NG"  # 0.51
+    else:
+        labelStr = "OK"  # 0.45
 
     save_path_str = saveRoot + "/testResult"
     if os.path.exists(save_path_str) == False:
@@ -139,7 +141,7 @@ for i, testBatch in enumerate(testloader):
     # save_image(segTest.data, "%s/img_%d_seg_%s.jpg"% (save_path_str, i, labelStr))
     tensor_vis_result(imgTest, segTest, labelStr, cTest.item(), "%s/img_%d_%s.jpg" % (save_path_str, i, labelStr))
 
-    count +=1
+    count += 1
     if gt == 1 and labelStr == "NG":
         count_TP += 1
     elif gt == 1:
@@ -150,7 +152,7 @@ for i, testBatch in enumerate(testloader):
         count_TN += 1
 
     # print("processing image NO %d, time comsuption %fs"%(i, t2 - t1))
-    all_time = (t2-t1) + all_time
+    all_time = (t2 - t1) + all_time
     count_time = count_time + 1
     # print(all_time, count_time)
 
@@ -163,10 +165,10 @@ for i, testBatch in enumerate(testloader2):
     # gt_c = Variable(torch.Tensor(np.ones((batchData["img"].size(0), 1))), requires_grad=False)
     # Train_OK
     gt_c = Variable(torch.Tensor(np.zeros((batchData["img"].size(0), 1))), requires_grad=False)
-    
+
     # print(gt_c.numpy()[0,0]) # Train_NG:1.0,Train_OK:0.0
-    
-    gt = gt_c.numpy()[0,0]
+
+    gt = gt_c.numpy()[0, 0]
     t1 = time.time()
 
     imgTest = testBatch["img"].cuda()
@@ -181,11 +183,11 @@ for i, testBatch in enumerate(testloader2):
     torch.cuda.synchronize()
     t2 = time.time()
 
-    print("Image NO %d, Score %f"% (i, cTest.item()))
+    print("Image NO %d, Score %f" % (i, cTest.item()))
     if cTest.item() > 0.45:
-        labelStr = "NG" # 0.51
-    else: 
-        labelStr = "OK" # 0.45
+        labelStr = "NG"  # 0.51
+    else:
+        labelStr = "OK"  # 0.45
 
     save_path_str = saveRoot + "/testResult"
     if os.path.exists(save_path_str) == False:
@@ -194,7 +196,7 @@ for i, testBatch in enumerate(testloader2):
     # save_image(segTest.data, "%s/img_%d_seg_%s.jpg"% (save_path_str, i, labelStr))
     tensor_vis_result(imgTest, segTest, labelStr, cTest.item(), "%s/img_%d_%s.jpg" % (save_path_str, i, labelStr))
 
-    count +=1
+    count += 1
     if gt == 1 and labelStr == "NG":
         count_TP += 1
     elif gt == 1:
@@ -205,24 +207,24 @@ for i, testBatch in enumerate(testloader2):
         count_TN += 1
 
     # print("processing image NO %d, time comsuption %fs"%(i, t2 - t1))
-    all_time = (t2-t1) + all_time
+    all_time = (t2 - t1) + all_time
     count_time = count_time + 1
     # print(all_time, count_time)
 
-avg_time = all_time/count_time
-print("\na image avg time %fs" % avg_time)       
+avg_time = all_time / count_time
+print("\na image avg time %fs" % avg_time)
 
-accuracy = (count_TP + count_TN) / count   
-precision = count_TP / (count_TP + count_FP)   
-recall = count_TP / (count_TP + count_FN) 
+accuracy = (count_TP + count_TN) / count
+precision = count_TP / (count_TP + count_FP)
+recall = count_TP / (count_TP + count_FN)
 
 print("total number of samples = {}".format(count))
 print("positive = {}".format(count_TP + count_FN))
 print("negative = {}".format(count_FP + count_TN))
-print("TP = {}".format(count_TP ))
+print("TP = {}".format(count_TP))
 print("FP = {}".format(count_FP))
-print("TN = {}".format(count_TN ))
-print("FN = {}".format(count_FN ))
+print("TN = {}".format(count_TN))
+print("FN = {}".format(count_FN))
 print("accuracy = {:.4f}".format((count_TP + count_TN) / count))
 print("precision = {:.4f}".format(precision))
 print("recall = {:.4f}".format(recall))

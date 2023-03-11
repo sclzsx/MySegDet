@@ -160,6 +160,7 @@ class ViT_Classifier(torch.nn.Module):
         patches = rearrange(patches, 't b c -> b t c')
         features = self.layer_norm(self.transformer(patches))
         features = rearrange(features, 'b t c -> t b c')
+        print(features.shape)
         logits = self.head(features[0])
         return logits
 
@@ -167,16 +168,16 @@ class ViT_Classifier(torch.nn.Module):
 if __name__ == '__main__':
     shuffle = PatchShuffle(0.75)
     a = torch.rand(16, 2, 10)
-    print(a.shape)
+    # print(a.shape)
     b, forward_indexes, backward_indexes = shuffle(a)
-    print(b.shape)
+    # print(b.shape)
 
-    img = torch.rand(2, 3, 512, 512)
-    encoder = MAE_Encoder(image_size=512, patch_size=32)
-    decoder = MAE_Decoder(image_size=512, patch_size=32)
+    img = torch.rand(1, 3, 512, 512)
+    encoder = MAE_Encoder()
+    decoder = MAE_Decoder()
     features, backward_indexes = encoder(img)
-    print(forward_indexes.shape)
+    # print(forward_indexes.shape)
     predicted_img, mask = decoder(features, backward_indexes)
-    print(predicted_img.shape)
+    # print(predicted_img.shape)
     loss = torch.mean((predicted_img - img) ** 2 * mask / 0.75)
-    print(loss)
+    # print(loss)

@@ -34,7 +34,7 @@ parser.add_argument("--test_interval", type=int, default=10, help="interval of t
 parser.add_argument("--need_save", type=bool, default=True, help="need to save")
 parser.add_argument("--save_interval", type=int, default=10, help="interval of save weights")
 
-parser.add_argument("--img_height", type=int, default=512, help="size of image height") # 1408x512 704x256
+parser.add_argument("--img_height", type=int, default=512, help="size of image height")  # 1408x512 704x256
 parser.add_argument("--img_width", type=int, default=512, help="size of image width")
 
 opt = parser.parse_args()
@@ -48,7 +48,7 @@ segment_net = SegmentNet(init_weights=True)
 decision_net = DecisionNet(init_weights=True)
 
 # Loss functions
-#criterion_segment  = torch.nn.MSELoss()
+# criterion_segment  = torch.nn.MSELoss()
 criterion_decision = torch.nn.MSELoss()
 
 # Optimizers
@@ -75,50 +75,48 @@ else:
 segment_net.load_state_dict(torch.load(saveRoot + "/saved_models/segment_net_%d.pth" % (opt.seg_epoch)))
 segment_net.eval()
 
-
 transforms_ = transforms.Compose([
-    transforms.Resize((opt.img_height, opt.img_width), Image.BICUBIC),
+    transforms.Resize((opt.img_height, opt.img_width), transforms.InterpolationMode.BILINEAR),
     transforms.ToTensor(),
-    #transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+    # transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
 ])
 
 transforms_mask = transforms.Compose([
-    transforms.Resize((opt.img_height//8, opt.img_width//8)),
+    transforms.Resize((opt.img_height // 8, opt.img_width // 8), transforms.InterpolationMode.NEAREST),
     transforms.ToTensor(),
-    #transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+    # transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
 ])
 
 trainOKloader = DataLoader(
-    KolektorDataset(dataSetRoot, transforms_=transforms_, transforms_mask= transforms_mask, 
-        subFold="Train_OK", isTrain=True),
+    KolektorDataset(dataSetRoot, transforms_=transforms_, transforms_mask=transforms_mask,
+                    subFold="Train_OK", isTrain=True),
     batch_size=opt.batch_size,
     shuffle=True,
     num_workers=opt.worker_num,
 )
 trainNGloader = DataLoader(
-    KolektorDataset(dataSetRoot, transforms_=transforms_,  transforms_mask= transforms_mask, 
-        subFold="Train_NG", isTrain=True),
+    KolektorDataset(dataSetRoot, transforms_=transforms_, transforms_mask=transforms_mask,
+                    subFold="Train_NG", isTrain=True),
     batch_size=opt.batch_size,
     shuffle=True,
     num_workers=opt.worker_num,
 )
 
 testloader = DataLoader(
-    KolektorDataset(dataSetRoot, transforms_=transforms_, transforms_mask= transforms_mask,  
-        subFold="Test_NG", isTrain=False),
+    KolektorDataset(dataSetRoot, transforms_=transforms_, transforms_mask=transforms_mask,
+                    subFold="Test_NG", isTrain=False),
     batch_size=1,
     shuffle=False,
     num_workers=0,
 )
 
-
 for epoch in range(opt.begin_epoch, opt.end_epoch):
-    
+
     iterOK = trainOKloader.__iter__()
     iterNG = trainNGloader.__iter__()
 
-    lenNum = min( len(trainNGloader), len(trainOKloader))
-    lenNum = 2*(lenNum-1)
+    lenNum = min(len(trainNGloader), len(trainOKloader))
+    lenNum = 2 * (lenNum - 1)
 
     decision_net.train()
     segment_net.eval()
@@ -126,12 +124,12 @@ for epoch in range(opt.begin_epoch, opt.end_epoch):
     for i in range(0, lenNum):
         if i % 2 == 0:
             batchData = iterOK.__next__()
-            #idx, batchData = enumerate(trainOKloader)
+            # idx, batchData = enumerate(trainOKloader)
             gt_c = Variable(torch.Tensor(np.zeros((batchData["img"].size(0), 1))), requires_grad=False)
-        else :
+        else:
             batchData = iterNG.__next__()
             gt_c = Variable(torch.Tensor(np.ones((batchData["img"].size(0), 1))), requires_grad=False)
-            #idx, batchData = enumerate(trainNGloader)
+            # idx, batchData = enumerate(trainNGloader)
 
         if opt.cuda:
             img = batchData["img"].cuda()
@@ -140,7 +138,7 @@ for epoch in range(opt.begin_epoch, opt.end_epoch):
         else:
             img = batchData["img"]
             mask = batchData["mask"]
-        
+
         rst = segment_net(img)
         f = rst["f"]
         seg = rst["seg"]
@@ -156,15 +154,15 @@ for epoch in range(opt.begin_epoch, opt.end_epoch):
 
         sys.stdout.write(
             "\r [Epoch %d/%d]  [Batch %d/%d] [loss %f]"
-             %(
+            % (
                 epoch,
                 opt.end_epoch,
                 i,
                 lenNum,
                 loss_dec.item()
-             )
+            )
         )
-    
+
     # test 
     if opt.need_test and epoch % opt.test_interval == 0 and epoch >= opt.test_interval:
         decision_net.eval()
@@ -174,30 +172,30 @@ for epoch in range(opt.begin_epoch, opt.end_epoch):
             imgTest = testBatch["img"].cuda()
             t1 = time.time()
 
-            rstTest = segment_net(imgTest)                      
+            rstTest = segment_net(imgTest)
             fTest = rstTest["f"]
             segTest = rstTest["seg"]
             cTest = decision_net(fTest, segTest)
 
             t2 = time.time()
-            save_path_str = saveRoot + "/testResultDec/epoch_%d"%epoch
+            save_path_str = saveRoot + "/testResultDec/epoch_%d" % epoch
             if os.path.exists(save_path_str) == False:
                 os.makedirs(save_path_str, exist_ok=True)
                 # os.mkdir(save_path_str)
             if cTest.item() > 0.5:
                 labelStr = "NG"
-            else: 
+            else:
                 labelStr = "OK"
-            save_image(imgTest.data, "%s/img_%d_%s.jpg"% (save_path_str, i , labelStr))
-            save_image(segTest.data, "%s/img_%d_seg_%s.jpg"% (save_path_str, i, labelStr))
+            save_image(imgTest.data, "%s/img_%d_%s.jpg" % (save_path_str, i, labelStr))
+            save_image(segTest.data, "%s/img_%d_seg_%s.jpg" % (save_path_str, i, labelStr))
 
             # print("processing image NO %d, time comsuption %fs"%(i, t2 - t1))
-            all_time = (t2-t1) + all_time
+            all_time = (t2 - t1) + all_time
             count_time = i + 1
             # print(all_time, count_time)
 
-        avg_time = all_time/count_time
-        print("\na image avg time %fs" % avg_time)        
+        avg_time = all_time / count_time
+        print("\na image avg time %fs" % avg_time)
         decision_net.train()
 
     # save model parameters 
@@ -207,6 +205,6 @@ for epoch in range(opt.begin_epoch, opt.end_epoch):
         if os.path.exists(save_path_str) == False:
             os.makedirs(save_path_str, exist_ok=True)
         torch.save(decision_net.state_dict(), "%s/decision_net_%d.pth" % (save_path_str, epoch))
-        print("save weights ! epoch = %d"%epoch)
+        print("save weights ! epoch = %d" % epoch)
         # decision_net.train()
         pass
