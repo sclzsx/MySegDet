@@ -172,7 +172,7 @@ class DecisionNet(nn.Module):
 if __name__ == '__main__':
     snet = SegmentNet()
     dnet = DecisionNet()
-    img = torch.randn(4, 3, 704, 256)
+    img = torch.randn(4, 3, 512, 512)
 
     snet.eval()
     snet = snet.cuda()

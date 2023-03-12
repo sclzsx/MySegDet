@@ -61,7 +61,7 @@ class Dataset(Dataset):
         mask = cv2.imread(mask_path, 0)
         mask = cv2.resize(mask, (self.image_size, self.image_size))
         if self.train_dil:
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
             mask = cv2.dilate(mask, kernel)
         mask = cv2.resize(mask, None, fx=0.125, fy=0.125)
         img = img / 255

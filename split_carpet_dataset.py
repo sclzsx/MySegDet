@@ -16,14 +16,13 @@ def mkdir(d):
         os.makedirs(d)
 
 
-def split_binary():
-    data_root = 'datasets/carpet'
-    ok_dir_train = 'datasets/carpet_binary/Train_OK'
-    ng_dir_train = 'datasets/carpet_binary/Train_NG'
-    ok_dir_test = 'datasets/carpet_binary/Test_OK'
-    ng_dir_test = 'datasets/carpet_binary/Test_NG'
+def split_binary(data_root, save_dir):
+    ok_dir_train = save_dir + '/Train_OK'
+    ng_dir_train = save_dir + '/Train_NG'
+    ok_dir_test = save_dir + '/Test/OK'
+    ng_dir_test = save_dir + '/Test/NG'
 
-    test_rate = 0.2  # 测试集所占的比例
+    test_rate = 0.3  # 测试集所占的比例
 
     mkdir(ok_dir_train)
     mkdir(ng_dir_train)
@@ -73,12 +72,8 @@ def split_binary():
             shutil.move(str(mask_path).replace('_mask', ''), ng_dir_test)
 
 
-def split_multi(aug=0):
-    data_root = 'datasets/carpet'
-    save_root = 'datasets/carpet_multi'
-
-    test_rate = 0.2  # 测试集所占的比例
-
+def split_multi(data_root, save_root):
+    test_rate = 0.3  # 测试集所占的比例
     mkdir(save_root)
 
     # 对所有缺陷样本重命名，全放入save_root，并统计类别名
@@ -121,34 +116,48 @@ def split_multi(aug=0):
             shutil.move(mask_path, class_dir)
             shutil.move(img_path, class_dir)
 
-    if aug:
-        # 对训练集的缺陷样本做数据增强
-        train_mask_paths = [i for i in Path(save_root + '/train').rglob('*_mask.png')]
-        for mask_path in tqdm(train_mask_paths):
-            if 'good' in mask_path.name:
-                aug_n = 4
+
+def augment(data_root):  # 对训练集的缺陷样本做数据增强
+    root_name = Path(data_root).name
+    mask_paths = [i for i in Path(data_root).rglob('*_mask.png')]
+    for mask_path in tqdm(mask_paths):
+        parent = str(mask_path.parent)
+        if 'Test' in parent:
+            aug_n = 1
+        else:
+            if 'OK' in parent:
+                aug_n = 3
             else:
-                aug_n = 4
-            mask_path = str(mask_path)
-            img_path = str(mask_path).replace('_mask', '')
-            mask = Image.open(mask_path).convert('L')
-            img = Image.open(img_path).convert('RGB')
-            for i in range(aug_n):
+                aug_n = 6
+        mask_path = str(mask_path)
+        img_path = str(mask_path).replace('_mask', '')
+        mask = Image.open(mask_path)
+        img = Image.open(img_path)
+        mask = mask.resize((512, 512), Image.NEAREST)
+        img = img.resize((512, 512), Image.BILINEAR)
+        for i in range(aug_n):
+            if i > 0:
                 transform = transforms.Compose([
                     transforms.RandomVerticalFlip(0.5),
                     transforms.RandomHorizontalFlip(0.5),
-                    transforms.RandomRotation(2, transforms.InterpolationMode.NEAREST, expand=False)
+                    transforms.RandomRotation(3, transforms.InterpolationMode.NEAREST, expand=False)
                 ])
                 torch.manual_seed(i)
                 img = transform(img)
                 torch.manual_seed(i)
                 mask = transform(mask)
-                save_img_path = img_path[:-4] + '_aug' + str(i) + '.png'
-                img.save(save_img_path)
-                mask.save(save_img_path.replace('.png', '_mask.png'))
-            # break
+
+            save_img_path = img_path[:-4] + '_aug_' + str(i) + '.png'
+            save_img_path = save_img_path.replace(root_name, root_name + '_aug')
+
+            save_mask_path = save_img_path.replace('.png', '_mask.png')
+
+            mkdir(str(Path(save_img_path).parent))
+            mkdir(str(Path(save_mask_path).parent))
+            img.save(save_img_path)
+            mask.save(save_mask_path)
 
 
 if __name__ == '__main__':
-    # split_binary()
-    split_multi()
+    split_binary('datasets/carpet', 'datasets/carpet_binary')
+    augment('datasets/carpet_binary')
