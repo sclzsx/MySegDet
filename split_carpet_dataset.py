@@ -122,13 +122,13 @@ def augment(data_root):  # 对训练集的缺陷样本做数据增强
     mask_paths = [i for i in Path(data_root).rglob('*_mask.png')]
     for mask_path in tqdm(mask_paths):
         parent = str(mask_path.parent)
-        if 'Test' in parent:
-            aug_n = 1
+        if 'test' in parent:
+            aug_n = 3
         else:
-            if 'OK' in parent:
-                aug_n = 3
+            if 'good' in parent:
+                aug_n = 15
             else:
-                aug_n = 6
+                aug_n = 15
         mask_path = str(mask_path)
         img_path = str(mask_path).replace('_mask', '')
         mask = Image.open(mask_path)
@@ -159,5 +159,8 @@ def augment(data_root):  # 对训练集的缺陷样本做数据增强
 
 
 if __name__ == '__main__':
-    split_binary('datasets/carpet', 'datasets/carpet_binary')
-    augment('datasets/carpet_binary')
+    # split_binary('datasets/carpet', 'datasets/carpet_binary')
+    # augment('datasets/carpet_binary')
+
+    # split_multi('datasets/carpet', 'datasets/carpet_multi')
+    augment('datasets/carpet_multi')
