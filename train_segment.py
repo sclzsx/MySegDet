@@ -37,10 +37,10 @@ def get_opt():
     parser.add_argument("--end_epoch", type=int, default=20, help="end_epoch")
     parser.add_argument('--resume', type=bool, default=False)
     parser.add_argument('--dataSetRoot', type=str, default='datasets/carpet_multi')
-    parser.add_argument('--saveRoot', type=str, default='results/alexnet/seg')
+    parser.add_argument('--saveRoot', type=str, default='results/alexnet')
     parser.add_argument("--dilate", type=bool, default=1)
-    parser.add_argument("--do_train", type=bool, default=0)
-    parser.add_argument("--img_size", type=tuple, default=(512, 512))
+    parser.add_argument("--do_train", type=bool, default=1)
+    parser.add_argument("--img_size", type=tuple, default=(256, 256))
     opt = parser.parse_args()
     return opt
 
