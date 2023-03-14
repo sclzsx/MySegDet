@@ -162,5 +162,5 @@ if __name__ == '__main__':
     # split_binary('datasets/carpet', 'datasets/carpet_binary')
     # augment('datasets/carpet_binary')
 
-    # split_multi('datasets/carpet', 'datasets/carpet_multi')
+    split_multi('datasets/carpet', 'datasets/carpet_multi')
     augment('datasets/carpet_multi')

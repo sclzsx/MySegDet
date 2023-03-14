@@ -9,18 +9,34 @@ import torch
 from torch.utils.data import Dataset
 from pathlib import Path
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision
+from tqdm import tqdm
+from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score, confusion_matrix
 
-class_dict = {'good': 0, 'cut': 1, 'color': 2, 'hole': 3, 'metal_contamination': 4, 'thread': 5}
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+# class_dict = {'good': 0, 'cut': 1, 'color': 2, 'hole': 3, 'metal_contamination': 4, 'thread': 5}
+
+class_dict = {'good': 0, 'cut': 1, 'color': 1, 'hole': 1, 'metal_contamination': 1, 'thread': 1}
+
+def get_num_classes(class_dict):
+    class_ids = []
+    for k, v in class_dict.items():
+        if v not in class_ids:
+            class_ids.append(v)
+    num_classes = len(class_ids)
+    return num_classes
+
+num_classes = get_num_classes(class_dict)
 
 def get_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch_size", type=int, default=2, help="batch size of input")
     parser.add_argument("--lr", type=float, default=0.0001, help="adam: learning rate")
-    parser.add_argument("--end_epoch", type=int, default=120, help="end_epoch")
+    parser.add_argument("--end_epoch", type=int, default=20, help="end_epoch")
     parser.add_argument('--resume', type=bool, default=False)
-    parser.add_argument('--dataSetRoot', type=str, default='datasets/carpet_multi_aug')
+    parser.add_argument('--dataSetRoot', type=str, default='datasets/carpet_multi')
     parser.add_argument('--saveRoot', type=str, default='results/alexnet/seg')
     parser.add_argument("--dilate", type=bool, default=1)
     parser.add_argument("--do_train", type=bool, default=0)
@@ -30,20 +46,41 @@ def get_opt():
 
 
 class segnet(nn.Module):
-    def __init__(self, n_class, pretrained=True):
+    def __init__(self, num_classes, pretrained=True):
         super().__init__()
         self.base_model = torchvision.models.alexnet(pretrained=pretrained)
+        # print(self.base_model)
         self.features = self.base_model.features[:-1]
-        self.up1 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
-        self.up2 = nn.ConvTranspose2d(128, n_class, kernel_size=2, stride=2)
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(256, 64, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(64), 
+            nn.ReLU(inplace=True))
+        self.conv2 = nn.Conv2d(64, num_classes, kernel_size=1, padding=0, bias=True)
+
+        self.maxpool =  nn.MaxPool2d(kernel_size=3, stride=2, padding=0, dilation=1, ceil_mode=False)
+        self.avgpool = nn.AdaptiveAvgPool2d(output_size=(6, 6))
+        self.classifier = nn.Sequential(
+            nn.Dropout(p=0.5, inplace=False),
+            nn.Linear(in_features=9216, out_features=4096, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.5, inplace=False),
+            nn.Linear(in_features=4096, out_features=4096, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Linear(in_features=4096, out_features=num_classes, bias=True),
+        )
 
     def forward(self, x0):
-        x = self.features(x0)
-        x = nn.functional.interpolate(x, size=(x0.size(2) // 4, x0.size(3) // 4), mode='bilinear', align_corners=True)
-        x = self.up1(x)
-        x = self.up2(x)
-        x = x + x0
-        return x
+        f = self.features(x0)
+
+        x1 = F.interpolate(f, size=(x0.size(2), x0.size(3)), mode='bilinear', align_corners=True)
+        x1 = self.conv1(x1)
+        x1 = self.conv2(x1)
+
+        x2 = self.maxpool(f)
+        x2 = self.avgpool(x2)
+        x2 = x2.view(x2.size(0), -1)
+        x2 = self.classifier(x2)
+        return x1, x2
 
 
 class dataset(Dataset):
@@ -78,8 +115,8 @@ class dataset(Dataset):
 
         img = torch.from_numpy(img).permute(2, 0, 1)
         mask = torch.from_numpy(mask).long()
-        # print(img.shape, mask.shape)
 
+        # print(img.shape, mask.shape, label.shape, img.dtype, mask.dtype, label.dtype)
         return {"img": img, "mask": mask, 'label': label}
 
 
@@ -92,7 +129,8 @@ def train(opt):
     writer = SummaryWriter(opt.saveRoot)
 
     # Build nets
-    net = segnet(n_class=len(class_dict)).to(device)
+    net = segnet(num_classes=num_classes).to(device)
+    print(net)
 
     # Loss functions
     criterion = torch.nn.CrossEntropyLoss()
@@ -120,47 +158,82 @@ def train(opt):
     test_dataloader = DataLoader(test_dataset, batch_size=opt.batch_size, shuffle=False, num_workers=0)
 
     iter_n = len(train_dataloader)
-    min_val_loss = 10000
+    max_f1 = -1
     for epoch in range(start_epoch + 1, opt.end_epoch + 1):
         # train
         net.train()
 
-        avg_loss, gt_labels, pred_labels = [], [], []
+        avg_loss, avg_loss_seg, avg_loss_cls = [], [], []
         for i, batchData in enumerate(train_dataloader):
             img = batchData["img"].to(device)
             mask = batchData["mask"].to(device)
             label = batchData['label'].to(device)
             optimizer.zero_grad()
             out = net(img)
-            # print(img.shape, mask.shape, out.shape)
-            loss = criterion(out, mask)
+            pred_mask = out[0]
+            pred_label = out[1]
+            loss_seg = criterion(pred_mask, mask)
+            loss_cls = criterion(pred_label, label)
+            # print(loss_seg.item(), loss_cls.item())
+            loss = loss_seg + loss_cls
             loss.backward()
             optimizer.step()
-
             avg_loss.append(loss.item())
+            avg_loss_seg.append(loss_seg.item())
+            avg_loss_cls.append(loss_cls.item())
             if i % int(iter_n * 0.3) == 0:
-                print('Epoch:{}, Iter:[{}/{}], loss:{}'.format(epoch, i + 1, iter_n, loss.item()))
+                print('Epoch:{}, Iter:[{}/{}], loss:{}, loss_seg:{}, loss_cls:{}'.format(epoch, i + 1, iter_n, loss.item(), loss_seg.item(), loss_cls.item()))
         avg_loss = sum(avg_loss) / len(avg_loss)
+        avg_loss_seg = sum(avg_loss_seg) / len(avg_loss_seg)
+        avg_loss_cls = sum(avg_loss_cls) / len(avg_loss_cls)
         writer.add_scalar('train_loss', avg_loss, global_step=epoch)
+        writer.add_scalar('train_loss_seg', avg_loss_seg, global_step=epoch)
+        writer.add_scalar('train_loss_cls', avg_loss_cls, global_step=epoch)
 
         # val
         net.eval()
-        avg_loss, gt_labels, pred_labels = [], [], []
-        with torch.no_grad():
-            for batchData in test_dataloader:
+        labels, preds = [], []
+        avg_loss, avg_loss_seg, avg_loss_cls = [], [], []
+        for batchData in test_dataloader:
+            with torch.no_grad():
                 img = batchData["img"].to(device)
                 mask = batchData["mask"].to(device)
                 label = batchData['label'].to(device)
-
                 out = net(img)
-                loss = criterion(out, mask)
-                avg_loss.append(loss.item())
+            pred_mask = out[0]
+            pred_label = out[1]
+            loss_seg = criterion(pred_mask, mask)
+            loss_cls = criterion(pred_label, label)
+            loss = loss_seg * 0.5 + loss_cls
+            avg_loss.append(loss.item())
+            avg_loss_seg.append(loss_seg.item())
+            avg_loss_cls.append(loss_cls.item())
+
+            label = label.cpu().tolist()
+            softmax = F.softmax(pred_label.cpu(), dim=1)
+            pred_label = torch.max(softmax, 1)[1].cpu().tolist()
+            # print(label, pred_label)
+            labels.extend(label)
+            preds.extend(pred_label)
+
         avg_loss = sum(avg_loss) / len(avg_loss)
+        avg_loss_seg = sum(avg_loss_seg) / len(avg_loss_seg)
+        avg_loss_cls = sum(avg_loss_cls) / len(avg_loss_cls)
         writer.add_scalar('val_loss', avg_loss, global_step=epoch)
+        writer.add_scalar('val_loss_seg', avg_loss_seg, global_step=epoch)
+        writer.add_scalar('val_loss_cls', avg_loss_cls, global_step=epoch)
+
+        if num_classes > 2:
+            val_f1 = f1_score(labels, preds, average='weighted')
+        else:
+            val_f1 = f1_score(labels, preds, average='binary')
+        writer.add_scalar('val_f1', val_f1, global_step=epoch)
+
+        print('[eval] loss:{}, loss_seg:{}, loss_cls:{}, val_f1:{}'.format(loss.item(), loss_seg.item(), loss_cls.item(), val_f1))
 
         # save model parameters
-        if avg_loss < min_val_loss:
-            min_val_loss = avg_loss
+        if val_f1 > max_f1:
+            max_f1 = val_f1
             checkpoint = {
                 "net": net.state_dict(),
                 'optimizer': optimizer.state_dict(),
@@ -169,42 +242,13 @@ def train(opt):
             }
             torch.save(checkpoint, opt.saveRoot + '/best.pt')
             print('-' * 60)
-            print('Saved checkpoint as min_val_loss:', min_val_loss)
+            print('Saved checkpoint as max_f1:', max_f1)
             print('-' * 60)
 
+def evaluate(opt):
+    
 
-def add_mask_to_source_multi_classes(source_np, mask_np, num_classes):
-    colors = [[0, 0, 0], [0, 255, 0], [255, 0, 0], [0, 0, 255], [255, 0, 255], [0, 255, 255], [255, 255, 0]]
-    foreground_mask_bool = mask_np.astype('bool')
-    foreground_mask = mask_np * foreground_mask_bool
-    foreground = np.zeros(source_np.shape, dtype='uint8')
-    background = source_np.copy()
-
-    for i in range(1, num_classes + 1):
-        fg_tmp = np.where(foreground_mask == i, 1, 0)
-        fg_tmp_mask_bool = fg_tmp.astype('bool')
-
-        fg_color_tmp = np.zeros(source_np.shape, dtype='uint8')
-        fg_color_tmp[:, :] = colors[i]
-        for c in range(3):
-            fg_color_tmp[:, :, c] *= fg_tmp_mask_bool
-        foreground += fg_color_tmp
-    foreground = cv2.addWeighted(source_np, 0.8, foreground, 0.2, 0)
-
-    for i in range(3):
-        foreground[:, :, i] *= foreground_mask_bool
-        background[:, :, i] *= ~foreground_mask_bool
-
-    show = foreground + background
-    # plt.imshow(show)
-    # plt.pause(0.5)
-    return show
-
-
-def tes(opt):
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-    net = segnet(n_class=len(class_dict)).to(device)
+    net = segnet(num_classes=num_classes).to(device)
 
     checkpoint = torch.load(opt.saveRoot + '/best.pt')
     net.load_state_dict(checkpoint['net'])
@@ -212,26 +256,58 @@ def tes(opt):
     test_dataset = dataset(opt.dataSetRoot, 'test', opt.img_size, opt.dilate)
 
     net.eval()
-    avg_loss, gt_labels, pred_labels = [], [], []
-    with torch.no_grad():
-        for i, Data in enumerate(test_dataset):
-            img = Data["img"].unsqueeze(0).to(device)
-            mask = Data["mask"].unsqueeze(0).to(device)
-            label = Data['label'].unsqueeze(0).to(device)
 
+    labels, preds = [], []
+    cnt = 0
+    for Data in tqdm(test_dataset):
+        img = Data["img"].unsqueeze(0).to(device)
+        mask = Data["mask"].unsqueeze(0)
+        label = Data['label'].item()
+        with torch.no_grad():
             out = net(img)
-            out = torch.max(out.data, 1)[1]
+        pred_mask = out[0].cpu()
+        pred_label = out[1].cpu()
+        pred_mask = torch.max(pred_mask.data, 1)[1].squeeze()
+        softmax = F.softmax(pred_label, dim=1)
+        score = torch.max(softmax, 1)[0].squeeze().item()
+        pred_label = torch.max(softmax, 1)[1].squeeze().item()
+        labels.append(label)
+        preds.append(pred_label)
+        # print(label, pred_label, score)
 
-            img_np = (np.clip(np.array(img[0, 1, :, :].cpu().squeeze()), 0, 1) * 255).astype('uint8')
-            mask_np = (np.array(mask[0, :, :].cpu()) * 255).astype('uint8')
-            out_np = (np.array(out[0, :, :].cpu()) * 255).astype('uint8')
+        img = (np.array(img.cpu().squeeze().permute(1, 2, 0)) * 255).astype('uint8')
+        mask = (np.array(mask) * 255).astype('uint8')
+        pred_mask = np.array(pred_mask)
+        pred_mask = np.where(pred_mask > 0, 255, 0).astype('uint8')
+        # print(pred_mask.shape, pred_mask.dtype)
+        _, contours, _ = cv2.findContours(pred_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        if len(contours) > 0:
+            max_area = -1
+            for c in contours:
+                area = cv2.contourArea(c)
+                if area > max_area:
+                    max_contour = c
+                    max_area = area
+                [x, y, w, h] = cv2.boundingRect(max_contour)
+            cv2.rectangle(img, (x + 1, y), (x + w, y + h), (0, 0, 255), 2)
+            cv2.rectangle(img, (x, max(y - 40, 0)), (x + w, y), (0, 0, 255), -1)
+            cv2.putText(img, str(np.round(score, 6)), (x + 4, max(y - 10, 0)), cv2.FONT_HERSHEY_COMPLEX, 0.9, (255, 255, 255), 2)
+        save_dir = opt.saveRoot + '/test_vis'
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+        cv2.imwrite(save_dir + '/iter_' + str(cnt) + '.jpg', img)
 
-            show = cv2.hconcat([img_np, mask_np, out_np])
-            save_dir = opt.saveRoot + '/test_vis'
-            if not os.path.exists(save_dir):
-                os.makedirs(save_dir)
-            plt.imshow(show)
-            plt.savefig(save_dir + '/iter_' + str(i) + '.jpg')
+        cnt += 1
+
+    if num_classes > 2:
+        precision = precision_score(labels, preds, average='weighted')
+        recall = recall_score(labels, preds, average='weighted')
+        f1 = f1_score(labels, preds, average='weighted')
+    else:
+        precision = precision_score(labels, preds, average='binary')
+        recall = recall_score(labels, preds, average='binary')
+        f1 = f1_score(labels, preds, average='binary')
+    print('precision:{}, recall:{}, f1:{}'.format(precision, recall, f1))
 
 
 if __name__ == '__main__':
@@ -243,4 +319,4 @@ if __name__ == '__main__':
     opt = get_opt()
     if opt.do_train:
         train(opt)
-    tes(opt)
+    evaluate(opt)
