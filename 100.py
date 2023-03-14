@@ -39,60 +39,17 @@ def get_opt():
     parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--end_epoch", type=int, default=50)
     parser.add_argument('--resume', type=bool, default=False)
-    parser.add_argument('--dataSetRoot', type=str, default='datasets/carpet_multi19')
-    parser.add_argument('--saveRoot', type=str, default='results/simple19')
+    parser.add_argument('--dataSetRoot', type=str, default='datasets/carpet_multi')
+    parser.add_argument('--saveRoot', type=str, default='results/alexnet512')
     parser.add_argument("--dilate", type=bool, default=1)
     parser.add_argument("--augment", type=bool, default=1)
     parser.add_argument("--do_train", type=bool, default=1)
     parser.add_argument("--img_size", type=tuple, default=(512, 512))
-    parser.add_argument("--backbone", type=str, default='vgg16')
-    parser.add_argument("--pretrained", type=bool, default=1)
     opt = parser.parse_args()
     return opt
 
-class SegClsNet_simple(nn.Module):
-    def __init__(self, num_classes, pretrained):
-        super().__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=3, padding=1, bias=False), nn.BatchNorm2d(32), nn.ReLU(inplace=True), nn.MaxPool2d(kernel_size=2),
-            nn.Conv2d(32, 64, kernel_size=3, padding=1, bias=False), nn.BatchNorm2d(64), nn.ReLU(inplace=True), nn.MaxPool2d(kernel_size=2),
-            nn.Conv2d(64, 128, kernel_size=3, padding=1, bias=False), nn.BatchNorm2d(128), nn.ReLU(inplace=True), nn.MaxPool2d(kernel_size=2),
-            nn.Conv2d(128, 256, kernel_size=3, padding=1, bias=False), nn.BatchNorm2d(256), nn.ReLU(inplace=True), nn.MaxPool2d(kernel_size=2),
-        )
-
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(256, 64, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True))
-        self.conv2 = nn.Conv2d(64, num_classes, kernel_size=1, padding=0, bias=True)
-
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=0, dilation=1, ceil_mode=False)
-        self.avgpool = nn.AdaptiveAvgPool2d(output_size=(6, 6))
-        self.classifier = nn.Sequential(
-            nn.Dropout(p=0.5, inplace=False),
-            nn.Linear(in_features=9216, out_features=4096, bias=True),
-            nn.ReLU(inplace=True),
-            nn.Dropout(p=0.5, inplace=False),
-            nn.Linear(in_features=4096, out_features=4096, bias=True),
-            nn.ReLU(inplace=True),
-            nn.Linear(in_features=4096, out_features=num_classes, bias=True),
-        )
-
-    def forward(self, x0):
-        f = self.features(x0)
-
-        x1 = F.interpolate(f, size=(x0.size(2), x0.size(3)), mode='bilinear', align_corners=True)
-        x1 = self.conv1(x1)
-        x1 = self.conv2(x1)
-
-        x2 = self.maxpool(f)
-        x2 = self.avgpool(x2)
-        x2 = x2.view(x2.size(0), -1)
-        x2 = self.classifier(x2)
-        return x1, x2
-
-class SegClsNet_alexnet(nn.Module):
-    def __init__(self, num_classes, pretrained):
+class segnet(nn.Module):
+    def __init__(self, num_classes, pretrained=True):
         super().__init__()
         self.base_model = torchvision.models.alexnet(pretrained=pretrained)
         # print(self.base_model)
@@ -190,10 +147,8 @@ def train(opt):
     writer = SummaryWriter(opt.saveRoot)
 
     # Build nets
-    # net = SegClsNet_alexnet(num_classes=num_classes, pretrained=opt.pretrained).to(device)
-    net = SegClsNet_simple(num_classes=num_classes, pretrained=opt.pretrained).to(device)
-
-    print(net)
+    net = segnet(num_classes=num_classes).to(device)
+    # print(net)
 
     # Loss functions
     criterion_seg = torch.nn.CrossEntropyLoss()
@@ -315,8 +270,7 @@ def train(opt):
 
 
 def evaluate(opt):
-    # net = SegClsNet_alexnet(num_classes=num_classes, pretrained=False).to(device)
-    net = SegClsNet_simple(num_classes=num_classes, pretrained=opt.pretrained).to(device)
+    net = segnet(num_classes=num_classes).to(device)
 
     checkpoint = torch.load(opt.saveRoot + '/best.pt')
     net.load_state_dict(checkpoint['net'])

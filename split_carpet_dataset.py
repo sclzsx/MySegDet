@@ -73,7 +73,7 @@ def split_binary(data_root, save_dir):
 
 
 def split_multi(data_root, save_root):
-    test_rate = 0.3  # 测试集所占的比例
+    test_rate = 0.9  # 测试集所占的比例
     mkdir(save_root)
 
     # 对所有缺陷样本重命名，全放入save_root，并统计类别名
@@ -123,12 +123,12 @@ def augment(data_root):  # 对训练集的缺陷样本做数据增强
     for mask_path in tqdm(mask_paths):
         parent = str(mask_path.parent)
         if 'test' in parent:
-            aug_n = 3
+            aug_n = 2
         else:
             if 'good' in parent:
-                aug_n = 15
+                aug_n = 8
             else:
-                aug_n = 15
+                aug_n = 8
         mask_path = str(mask_path)
         img_path = str(mask_path).replace('_mask', '')
         mask = Image.open(mask_path)
@@ -160,7 +160,7 @@ def augment(data_root):  # 对训练集的缺陷样本做数据增强
 
 if __name__ == '__main__':
     # split_binary('datasets/carpet', 'datasets/carpet_binary')
-    # augment('datasets/carpet_binary')
 
-    split_multi('datasets/carpet', 'datasets/carpet_multi')
-    augment('datasets/carpet_multi')
+    split_multi('datasets/carpet', 'datasets/carpet_multi19')
+
+    # augment('datasets/carpet_multi')
