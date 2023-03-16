@@ -388,7 +388,7 @@ def evaluate(opt, test_pt_name):
 
 if __name__ == '__main__':
     # img = torch.randn(2, 3, 512, 512).cuda()
-    # net = SegClsNet('vgg16', 2, False).cuda()
+    # net = SegClsNet('alexnet', 2, False).cuda()
     # out = net(img)
     # print(out[0].shape, out[1].shape)
 
