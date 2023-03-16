@@ -26,6 +26,7 @@ else:
     device = 'cpu'
 
 class_dict = {'good': 0, 'cut': 1, 'color': 1, 'hole': 1, 'metal_contamination': 1, 'thread': 1}
+print(class_dict)
 
 class_ids = []
 for k, v in class_dict.items():
@@ -43,9 +44,9 @@ def get_opt():
 
     parser.add_argument("--dilate", type=int, default=5)
     parser.add_argument("--augment", type=int, default=1)
-    parser.add_argument("--do_train", type=int, default=0)
+    parser.add_argument("--do_train", type=int, default=1)
     parser.add_argument("--img_size", type=tuple, default=(224, 224))
-    parser.add_argument("--backbone", type=str, default='simple')
+    parser.add_argument("--backbone", type=str, default='maebase')
     parser.add_argument("--pretrained", type=int, default=True)
 
     parser.add_argument('--dataset', type=str, default='../datasets/carpet_multi64')
@@ -80,6 +81,10 @@ class SegClsNet(nn.Module):
                 decoder_heads=16,
                 mask_ratio=0.75
             ).to(device)
+            if pretrained:
+                ckpt_path = '../MAE/weights/vit-mae_losses_0.20102281799793242.pth'
+                ckpt = torch.load(ckpt_path, map_location="cpu")['state_dict']
+                model.load_state_dict(ckpt, strict=True)
             self.autoencoder = model.Encoder.autoencoder
             self.proj = model.proj
             self.mae_decoder = model.Decoder.decoder
