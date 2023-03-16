@@ -16,6 +16,23 @@ from tqdm import tqdm
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score, confusion_matrix, roc_curve, auc
 from pathlib import Path
 import json
+from torch.cuda.amp import autocast as autocast
+from mae_model.Transformers.VIT.mae import MAEVisionTransformers as MAE
+
+if torch.cuda.is_available():
+    device = 'cuda'
+    torch.backends.cudnn.benchmark = True
+else:
+    device = 'cpu'
+
+class_dict = {'good': 0, 'cut': 1, 'color': 1, 'hole': 1, 'metal_contamination': 1, 'thread': 1}
+
+class_ids = []
+for k, v in class_dict.items():
+    if v not in class_ids:
+        class_ids.append(v)
+num_classes = len(class_ids)
+
 
 def get_opt():
     parser = argparse.ArgumentParser()
@@ -26,12 +43,10 @@ def get_opt():
 
     parser.add_argument("--dilate", type=int, default=5)
     parser.add_argument("--augment", type=int, default=1)
-    parser.add_argument("--do_train", type=int, default=1)
+    parser.add_argument("--do_train", type=int, default=0)
     parser.add_argument("--img_size", type=tuple, default=(224, 224))
-    parser.add_argument("--backbone", type=str, default='alexnet')
+    parser.add_argument("--backbone", type=str, default='simple')
     parser.add_argument("--pretrained", type=int, default=True)
-    parser.add_argument("--device", type=str, default='cuda')
-    parser.add_argument("--num_classes", type=int, default=2)
 
     parser.add_argument('--dataset', type=str, default='../datasets/carpet_multi64')
     parser.add_argument('--save_dir', type=str, default='results')
@@ -40,9 +55,11 @@ def get_opt():
     opt = parser.parse_args()
     return opt
 
+
 class SegClsNet(nn.Module):
     def __init__(self, backbone, num_classes, pretrained):
         super().__init__()
+        self.backbone = backbone
         if backbone == 'alexnet':
             model = torchvision.models.alexnet(pretrained=pretrained)
             self.features = model.features[:-1]
@@ -51,12 +68,36 @@ class SegClsNet(nn.Module):
             model = torchvision.models.vgg16(pretrained=pretrained)
             self.features = model.features[:-1]
             fea_c_num = 512
+        elif backbone == 'maebase':
+            model = MAE(
+                img_size=224,
+                patch_size=16,
+                encoder_dim=768,
+                encoder_depth=12,
+                encoder_heads=12,
+                decoder_dim=512,
+                decoder_depth=8,
+                decoder_heads=16,
+                mask_ratio=0.75
+            ).to(device)
+            self.autoencoder = model.Encoder.autoencoder
+            self.proj = model.proj
+            self.mae_decoder = model.Decoder.decoder
+            self.restruction = model.restruction
+            self.patch_norm = model.patch_norm
+            self.num_patch0 = model.num_patch[0]
+            self.num_patch1 = model.num_patch[1]
+            fea_c_num = 768
         else:
             self.features = nn.Sequential(
-                nn.Conv2d(3, 32, kernel_size=3, padding=1, bias=False), nn.BatchNorm2d(32), nn.ReLU(inplace=True), nn.MaxPool2d(kernel_size=2),
-                nn.Conv2d(32, 64, kernel_size=3, padding=1, bias=False), nn.BatchNorm2d(64), nn.ReLU(inplace=True), nn.MaxPool2d(kernel_size=2),
-                nn.Conv2d(64, 128, kernel_size=3, padding=1, bias=False), nn.BatchNorm2d(128), nn.ReLU(inplace=True), nn.MaxPool2d(kernel_size=2),
-                nn.Conv2d(128, 256, kernel_size=3, padding=1, bias=False), nn.BatchNorm2d(256), nn.ReLU(inplace=True), nn.MaxPool2d(kernel_size=2),
+                nn.Conv2d(3, 32, kernel_size=3, padding=1, bias=False), nn.BatchNorm2d(32), nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=2),
+                nn.Conv2d(32, 64, kernel_size=3, padding=1, bias=False), nn.BatchNorm2d(64), nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=2),
+                nn.Conv2d(64, 128, kernel_size=3, padding=1, bias=False), nn.BatchNorm2d(128), nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=2),
+                nn.Conv2d(128, 256, kernel_size=3, padding=1, bias=False), nn.BatchNorm2d(256), nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=2),
             )
             fea_c_num = 256
 
@@ -74,9 +115,9 @@ class SegClsNet(nn.Module):
         self.attention_conv = nn.Conv2d(3, num_classes, kernel_size=1, padding=0, bias=False)
 
         self.line = nn.Sequential(
-            nn.Conv2d(fea_c_num, fea_c_num * 2, kernel_size=1, padding=1, bias=False), 
-            nn.BatchNorm2d(fea_c_num * 2), 
-            nn.ReLU(inplace=True), 
+            nn.Conv2d(fea_c_num, fea_c_num * 2, kernel_size=1, padding=1, bias=False),
+            nn.BatchNorm2d(fea_c_num * 2),
+            nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=2),
             nn.AdaptiveAvgPool2d(output_size=(1, 1))
         )
@@ -90,8 +131,18 @@ class SegClsNet(nn.Module):
         )
 
     def forward(self, x0):
-        f = self.features(x0)
-        # print(f.shape)
+        if self.backbone == 'maebase':
+            norm_embeeding, sample_index, mask_index = self.autoencoder(x0)
+            proj_embeeding = self.proj(norm_embeeding).type(torch.float16)
+            decode_embeeding = self.mae_decoder(proj_embeeding, sample_index, mask_index)
+            outputs = self.restruction(decode_embeeding)
+            image_token = outputs[:, 1:, :]  # (b, num_patches, patches_vector)
+            image_norm_token = self.patch_norm(image_token)
+            n, l, dim = image_norm_token.shape
+            f = image_norm_token.view(-1, self.num_patch0, self.num_patch1, dim).permute(0, 3, 1, 2)
+        else:
+            f = self.features(x0)
+        # print(f.shape, f.dtype)
 
         x1 = F.interpolate(f, size=(x0.size(2), x0.size(3)), mode='bilinear', align_corners=True)
         x1 = self.decoder(x1)
@@ -104,6 +155,7 @@ class SegClsNet(nn.Module):
         x2 = x2.view(x2.size(0), -1)
         x2 = self.classifier(x2)
         return x1, x2
+
 
 class dataset(Dataset):
     def __init__(self, dataRoot, subFold, img_size, dilate, augment):
@@ -167,7 +219,7 @@ def train(opt):
 
     writer = SummaryWriter(opt.save_dir)
 
-    net = SegClsNet(opt.backbone, opt.num_classes, opt.pretrained).to(opt.device)
+    net = SegClsNet(opt.backbone, num_classes, opt.pretrained).to(device)
 
     print(net)
 
@@ -204,9 +256,9 @@ def train(opt):
 
         avg_loss, avg_loss_seg, avg_loss_cls = [], [], []
         for i, batchData in enumerate(train_dataloader):
-            img = batchData["img"].to(opt.device)
-            mask = batchData["mask"].to(opt.device)
-            label = batchData['label'].to(opt.device)
+            img = batchData["img"].to(device)
+            mask = batchData["mask"].to(device)
+            label = batchData['label'].to(device)
             optimizer.zero_grad()
             out = net(img)
             pred_mask = out[0]
@@ -238,9 +290,9 @@ def train(opt):
         avg_loss, avg_loss_seg, avg_loss_cls = [], [], []
         for batchData in test_dataloader:
             with torch.no_grad():
-                img = batchData["img"].to(opt.device)
-                mask = batchData["mask"].to(opt.device)
-                label = batchData['label'].to(opt.device)
+                img = batchData["img"].to(device)
+                mask = batchData["mask"].to(device)
+                label = batchData['label'].to(device)
                 out = net(img)
             pred_mask = out[0]
             pred_label = out[1]
@@ -265,7 +317,7 @@ def train(opt):
         writer.add_scalar('val_loss_seg', avg_loss_seg, global_step=epoch)
         writer.add_scalar('val_loss_cls', avg_loss_cls, global_step=epoch)
 
-        if opt.num_classes > 2:
+        if num_classes > 2:
             val_f1 = f1_score(labels, preds, average='weighted')
         else:
             val_f1 = f1_score(labels, preds, average='binary')
@@ -303,7 +355,7 @@ def train(opt):
 
 
 def evaluate(opt, test_pt_name):
-    net = SegClsNet(opt.backbone, opt.num_classes, opt.pretrained).to(opt.device)
+    net = SegClsNet(opt.backbone, num_classes, opt.pretrained).to(device)
 
     checkpoint = torch.load(opt.save_dir + '/' + test_pt_name + '.pt')
     net.load_state_dict(checkpoint['net'])
@@ -315,7 +367,7 @@ def evaluate(opt, test_pt_name):
     labels, preds, pred_scores = [], [], []
     cnt = 0
     for Data in tqdm(test_dataset):
-        img = Data["img"].unsqueeze(0).to(opt.device)
+        img = Data["img"].unsqueeze(0).to(device)
         mask = Data["mask"].unsqueeze(0)
         label = Data['label'].item()
         with torch.no_grad():
@@ -356,7 +408,7 @@ def evaluate(opt, test_pt_name):
 
         cnt += 1
 
-    if opt.num_classes > 2:
+    if num_classes > 2:
         precision = precision_score(labels, preds, average='weighted')
         recall = recall_score(labels, preds, average='weighted')
         f1 = f1_score(labels, preds, average='weighted')
@@ -386,26 +438,14 @@ def evaluate(opt, test_pt_name):
     with open(opt.save_dir + '/test_metrics_' + test_pt_name + '.json', 'w') as f:
         json.dump(metrics, f, indent=2)
 
+
 if __name__ == '__main__':
-    # img = torch.randn(2, 3, 512, 512).cuda()
-    # net = SegClsNet('alexnet', 2, False).cuda()
-    # out = net(img)
+    # x = torch.randn(2, 3, 224, 224).cuda()
+    # net = SegClsNet('maebase', 2, False).cuda()
+    # out = net(x)
     # print(out[0].shape, out[1].shape)
 
     opt = get_opt()
-
-    if torch.cuda.is_available():
-        opt.device = 'cuda'
-        torch.backends.cudnn.benchmark = True
-    else:
-        opt.device = 'cpu'
-
-    class_dict = {'good': 0, 'cut': 1, 'color': 1, 'hole': 1, 'metal_contamination': 1, 'thread': 1}
-    class_ids = []
-    for k, v in class_dict.items():
-        if v not in class_ids:
-            class_ids.append(v)
-    opt.num_classes = len(class_ids)
 
     opt.save_dir = opt.save_dir + '/' + Path(opt.dataset).name + '-' + Path(opt.backbone).name + '-' + opt.save_tag
     if not os.path.exists(opt.save_dir):
@@ -413,5 +453,5 @@ if __name__ == '__main__':
 
     if opt.do_train == 1:
         train(opt)
-    
+
     evaluate(opt, test_pt_name='min_loss')
