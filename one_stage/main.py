@@ -47,7 +47,7 @@ def get_opt():
     parser.add_argument("--do_train", type=int, default=1)
     parser.add_argument("--img_size", type=tuple, default=(224, 224))
     parser.add_argument("--backbone", type=str, default='maebase')
-    parser.add_argument("--pretrained", type=int, default=True)
+    parser.add_argument("--pretrained", type=int, default=1)
 
     parser.add_argument('--dataset', type=str, default='../datasets/carpet_multi64')
     parser.add_argument('--save_dir', type=str, default='results')
@@ -92,7 +92,18 @@ class SegClsNet(nn.Module):
             self.patch_norm = model.patch_norm
             self.num_patch0 = model.num_patch[0]
             self.num_patch1 = model.num_patch[1]
-            fea_c_num = 768
+            self.unconv = model.unconv
+            self.features = nn.Sequential(
+                nn.Conv2d(3, 64, kernel_size=3, padding=1, bias=False), nn.BatchNorm2d(64), nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=2),
+                nn.Conv2d(64, 128, kernel_size=3, padding=1, bias=False), nn.BatchNorm2d(128), nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=2),
+                nn.Conv2d(128, 256, kernel_size=3, padding=1, bias=False), nn.BatchNorm2d(256), nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=2),
+                nn.Conv2d(256, 512, kernel_size=3, padding=1, bias=False), nn.BatchNorm2d(512), nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=2),
+            )
+            fea_c_num = 512
         else:
             self.features = nn.Sequential(
                 nn.Conv2d(3, 32, kernel_size=3, padding=1, bias=False), nn.BatchNorm2d(32), nn.ReLU(inplace=True),
@@ -137,14 +148,18 @@ class SegClsNet(nn.Module):
 
     def forward(self, x0):
         if self.backbone == 'maebase':
-            norm_embeeding, sample_index, mask_index = self.autoencoder(x0)
-            proj_embeeding = self.proj(norm_embeeding).type(torch.float16)
-            decode_embeeding = self.mae_decoder(proj_embeeding, sample_index, mask_index)
-            outputs = self.restruction(decode_embeeding)
-            image_token = outputs[:, 1:, :]  # (b, num_patches, patches_vector)
-            image_norm_token = self.patch_norm(image_token)
-            n, l, dim = image_norm_token.shape
-            f = image_norm_token.view(-1, self.num_patch0, self.num_patch1, dim).permute(0, 3, 1, 2)
+            # norm_embeeding, sample_index, mask_index = self.autoencoder(x0)
+            # proj_embeeding = self.proj(norm_embeeding).type(torch.float16)
+            # decode_embeeding = self.mae_decoder(proj_embeeding, sample_index, mask_index)
+            # outputs = self.restruction(decode_embeeding)
+            # image_token = outputs[:, 1:, :]  # (b, num_patches, patches_vector)
+            # image_norm_token = self.patch_norm(image_token)
+            # n, l, dim = image_norm_token.shape
+            # image_norm_token = image_norm_token.view(-1, self.num_patch0, self.num_patch1, dim).permute(0, 3, 1, 2)
+            # restore_image = self.unconv(image_norm_token)
+            # f = self.features(restore_image)
+
+            f = self.features(x0)
         else:
             f = self.features(x0)
         # print(f.shape, f.dtype)
@@ -250,13 +265,12 @@ def train(opt):
     train_dataloader = DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True, num_workers=0)
 
     test_dataset = dataset(opt.dataset, 'test', img_size=opt.img_size, dilate=0, augment=0)
-    test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=0)
+    test_dataloader = DataLoader(test_dataset, batch_size=opt.batch_size, shuffle=False, num_workers=0)
 
     iter_n = len(train_dataloader)
     max_f1 = -1000
     min_loss = 1000
     for epoch in range(start_epoch + 1, opt.end_epoch + 1):
-        # train
         net.train()
 
         avg_loss, avg_loss_seg, avg_loss_cls = [], [], []
@@ -264,6 +278,10 @@ def train(opt):
             img = batchData["img"].to(device)
             mask = batchData["mask"].to(device)
             label = batchData['label'].to(device)
+
+            if img.shape[0] % opt.batch_size != 0:
+                continue
+
             optimizer.zero_grad()
             out = net(img)
             pred_mask = out[0]
@@ -298,6 +316,10 @@ def train(opt):
                 img = batchData["img"].to(device)
                 mask = batchData["mask"].to(device)
                 label = batchData['label'].to(device)
+
+                if img.shape[0] % opt.batch_size != 0:
+                    continue
+
                 out = net(img)
             pred_mask = out[0]
             pred_label = out[1]
